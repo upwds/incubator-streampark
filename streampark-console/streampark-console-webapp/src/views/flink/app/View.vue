@@ -15,245 +15,300 @@
   limitations under the License.
 -->
 <script lang="ts">
-  export default defineComponent({
-    name: 'AppView',
-  });
+export default defineComponent({
+  name: 'AppView',
+});
 </script>
 <script lang="ts" setup name="AppView">
-  import { defineComponent, nextTick, ref, unref, onUnmounted, onMounted } from 'vue';
-  import { useAppTableAction } from './hooks/useAppTableAction';
-  import { useI18n } from '/@/hooks/web/useI18n';
-  import { AppStateEnum, JobTypeEnum, OptionStateEnum, ReleaseStateEnum } from '/@/enums/flinkEnum';
-  import { useTimeoutFn } from '@vueuse/core';
-  import { Tooltip, Badge, Tag, Popover } from 'ant-design-vue';
-  import { fetchAppRecord } from '/@/api/flink/app';
-  import { useTable } from '/@/components/Table';
-  import { PageWrapper } from '/@/components/Page';
-  import { BasicTable, TableAction } from '/@/components/Table';
-  import { AppListRecord } from '/@/api/flink/app.type';
-  import { releaseTitleMap } from './data';
-  import { handleView } from './utils';
-  import { useDrawer } from '/@/components/Drawer';
-  import { useModal } from '/@/components/Modal';
+import { defineComponent, nextTick, ref, unref, onUnmounted, onMounted } from 'vue';
+import { useAppTableAction } from './hooks/useAppTableAction';
+import { useI18n } from '/@/hooks/web/useI18n';
+import {
+  AppExistsEnum,
+  AppStateEnum,
+  JobTypeEnum,
+  OptionStateEnum,
+  ReleaseStateEnum
+} from '/@/enums/flinkEnum';
+import { useTimeoutFn } from '@vueuse/core';
+import { Tooltip, Badge, Tag, Popover } from 'ant-design-vue';
+import {
+  fetchAbort,
+  fetchAppRecord,
+  fetchCancel,
+  fetchCheckStart,
+  fetchStart
+} from '/@/api/flink/app';
+import { useTable } from '/@/components/Table';
+import { PageWrapper } from '/@/components/Page';
+import { BasicTable, TableAction } from '/@/components/Table';
+import { AppListRecord } from '/@/api/flink/app.type';
+import { releaseTitleMap } from './data';
+import { handleView } from './utils';
+import { useDrawer } from '/@/components/Drawer';
+import { useModal } from '/@/components/Modal';
 
-  import StartApplicationModal from './components/AppView/StartApplicationModal.vue';
-  import StopApplicationModal from './components/AppView/StopApplicationModal.vue';
-  import LogModal from './components/AppView/LogModal.vue';
-  import BuildDrawer from './components/AppView/BuildDrawer.vue';
-  import AppDashboard from './components/AppView/AppDashboard.vue';
-  import State, {
-    buildStatusMap,
-    optionStateMap,
-    releaseStateMap,
-    stateMap,
-  } from './components/State';
-  import { useSavepoint } from './hooks/useSavepoint';
-  import { useAppTableColumns } from './hooks/useAppTableColumns';
-  import AppTableResize from './components/AppResize.vue';
-  const { t } = useI18n();
-  const optionApps = {
-    starting: new Map(),
-    stopping: new Map(),
-    release: new Map(),
-    savepointing: new Map(),
-  };
+import StartApplicationModal from './components/AppView/StartApplicationModal.vue';
+import StopApplicationModal from './components/AppView/StopApplicationModal.vue';
+import LogModal from './components/AppView/LogModal.vue';
+import BuildDrawer from './components/AppView/BuildDrawer.vue';
+import AppDashboard from './components/AppView/AppDashboard.vue';
+import State, {
+  buildStatusMap,
+  optionStateMap,
+  releaseStateMap,
+  stateMap,
+} from './components/State';
+import { useSavepoint } from './hooks/useSavepoint';
+import { useAppTableColumns } from './hooks/useAppTableColumns';
+import AppTableResize from './components/AppResize.vue';
+import Swal from "sweetalert2";
+const { t } = useI18n();
+const optionApps = {
+  starting: new Map(),
+  stopping: new Map(),
+  release: new Map(),
+  savepointing: new Map(),
+};
 
-  const appDashboardRef = ref<any>();
+const appDashboardRef = ref<any>();
 
-  const yarn = ref<Nullable<string>>(null);
-  const currentTablePage = ref(1);
-  const { onTableColumnResize, tableColumnWidth, getAppColumns } = useAppTableColumns();
-  const { openSavepoint } = useSavepoint(handleOptionApp);
-  const [registerStartModal, { openModal: openStartModal }] = useModal();
-  const [registerStopModal, { openModal: openStopModal }] = useModal();
-  const [registerLogModal, { openModal: openLogModal }] = useModal();
-  const [registerBuildDrawer, { openDrawer: openBuildDrawer }] = useDrawer();
-  const titleLenRef = ref({
-    maxState: '',
-    maxRelease: '',
-    maxBuild: '',
-  });
+const yarn = ref<Nullable<string>>(null);
+const currentTablePage = ref(1);
+const { onTableColumnResize, tableColumnWidth, getAppColumns } = useAppTableColumns();
+const { openSavepoint } = useSavepoint(handleOptionApp);
+const [registerStartModal, { openModal: openStartModal }] = useModal();
+const [registerStopModal, { openModal: openStopModal }] = useModal();
+const [registerLogModal, { openModal: openLogModal }] = useModal();
+const [registerBuildDrawer, { openDrawer: openBuildDrawer }] = useDrawer();
+const titleLenRef = ref({
+  maxState: '',
+  maxRelease: '',
+  maxBuild: '',
+});
 
-  const [registerTable, { reload, getLoading, setPagination }] = useTable({
-    rowKey: 'id',
-    api: fetchAppRecord,
-    beforeFetch: (params) => {
-      if (Reflect.has(params, 'state')) {
-        if (params.state && params.state.length > 0) {
-          params['stateArray'] = [...params.state];
-        }
-        delete params.state;
+const [registerTable, { reload, getLoading, setPagination ,getSelectRowKeys}] = useTable({
+  rowKey: 'id',
+  api: fetchAppRecord,
+  beforeFetch: (params) => {
+    if (Reflect.has(params, 'state')) {
+      if (params.state && params.state.length > 0) {
+        params['stateArray'] = [...params.state];
       }
-      currentTablePage.value = params.pageNum;
-      // sessionStorage.setItem('appPageNo', params.pageNum);
-      return params;
-    },
-    afterFetch: (dataSource) => {
-      const timestamp = new Date().getTime();
-      dataSource.forEach((x) => {
-        x.expanded = [
-          {
-            appId: x.appId,
-            jmMemory: x.jmMemory,
-            tmMemory: x.tmMemory,
-            totalTM: x.totalTM,
-            totalSlot: x.totalSlot,
-            availableSlot: x.availableSlot,
-          },
-        ];
-        if (x['optionState'] === OptionStateEnum.NONE) {
-          if (optionApps.starting.get(x.id)) {
-            if (timestamp - optionApps.starting.get(x.id) > 2000 * 2) {
-              optionApps.starting.delete(x.id);
-            }
-          }
-          if (optionApps.stopping.get(x.id)) {
-            if (timestamp - optionApps.stopping.get(x.id) > 2000) {
-              optionApps.stopping.delete(x.id);
-            }
-          }
-          if (optionApps.release.get(x.id)) {
-            if (timestamp - optionApps.release.get(x.id) > 2000) {
-              optionApps.release.delete(x.id);
-            }
-          }
-          if (optionApps.savepointing.get(x.id)) {
-            if (timestamp - optionApps.savepointing.get(x.id) > 2000) {
-              optionApps.savepointing.delete(x.id);
-            }
+      delete params.state;
+    }
+    currentTablePage.value = params.pageNum;
+    // sessionStorage.setItem('appPageNo', params.pageNum);
+    return params;
+  },
+  afterFetch: (dataSource) => {
+    const timestamp = new Date().getTime();
+    dataSource.forEach((x) => {
+      x.expanded = [
+        {
+          appId: x.appId,
+          jmMemory: x.jmMemory,
+          tmMemory: x.tmMemory,
+          totalTM: x.totalTM,
+          totalSlot: x.totalSlot,
+          availableSlot: x.availableSlot,
+        },
+      ];
+      if (x['optionState'] === OptionStateEnum.NONE) {
+        if (optionApps.starting.get(x.id)) {
+          if (timestamp - optionApps.starting.get(x.id) > 2000 * 2) {
+            optionApps.starting.delete(x.id);
           }
         }
-      });
-      const stateLenMap = dataSource.reduce(
-        (
-          prev: {
-            maxState: string;
-            maxRelease: string;
-            maxBuild: string;
-          },
-          cur: any,
-        ) => {
-          const { state, optionState, release, buildStatus } = cur;
-          // state title len
-          if (optionState === OptionStateEnum.NONE) {
-            const stateStr = stateMap[state]?.title;
-            if (stateStr && stateStr.length > prev.maxState.length) {
-              prev.maxState = stateStr;
-            }
-          } else {
-            const stateStr = optionStateMap[optionState]?.title;
-            if (stateStr && stateStr.length > prev.maxState.length) {
-              prev.maxState = stateStr;
-            }
+        if (optionApps.stopping.get(x.id)) {
+          if (timestamp - optionApps.stopping.get(x.id) > 2000) {
+            optionApps.stopping.delete(x.id);
           }
-
-          //release title len
-          const releaseStr = releaseStateMap[release]?.title;
-          if (releaseStr && releaseStr.length > prev.maxRelease.length) {
-            prev.maxRelease = releaseStr;
+        }
+        if (optionApps.release.get(x.id)) {
+          if (timestamp - optionApps.release.get(x.id) > 2000) {
+            optionApps.release.delete(x.id);
           }
-
-          //build title len
-          const buildStr = buildStatusMap[buildStatus]?.title;
-          if (buildStr && buildStr.length > prev.maxBuild.length) {
-            prev.maxBuild = buildStr;
+        }
+        if (optionApps.savepointing.get(x.id)) {
+          if (timestamp - optionApps.savepointing.get(x.id) > 2000) {
+            optionApps.savepointing.delete(x.id);
           }
-          return prev;
-        },
-        {
-          maxState: '',
-          maxRelease: '',
-          maxBuild: '',
-        },
-      );
-      Object.assign(titleLenRef.value, stateLenMap);
-
-      return dataSource;
-    },
-    fetchSetting: { listField: 'records' },
-    immediate: true,
-    canResize: false,
-    showIndexColumn: false,
-    showTableSetting: true,
-    useSearchForm: true,
-    tableSetting: { fullScreen: true, redo: false },
-    actionColumn: {
-      dataIndex: 'operation',
-      title: t('component.table.operation'),
-      width: 180,
-    },
-  });
-
-  const { getTableActions, formConfig } = useAppTableAction(
-    openStartModal,
-    openStopModal,
-    openSavepoint,
-    openLogModal,
-    openBuildDrawer,
-    handlePageDataReload,
-    optionApps,
-  );
-
-  /* view */
-  async function handleJobView(app: AppListRecord) {
-    // Task is running, restarting, in savePoint
-    if (
-      [AppStateEnum.RESTARTING, AppStateEnum.RUNNING].includes(app.state) ||
-      app['optionState'] === OptionStateEnum.SAVEPOINTING
-    ) {
-      // yarn-per-job|yarn-session|yarn-application
-      await handleView(app, unref(yarn));
-    }
-  }
-
-  /* Update options data */
-  function handleOptionApp(data: {
-    type: 'starting' | 'stopping' | 'release' | 'savepointing';
-    key: any;
-    value: any;
-  }) {
-    optionApps[data.type].set(data.key, data.value);
-  }
-
-  function handlePageDataReload(polling = false) {
-    nextTick(() => {
-      appDashboardRef.value?.handleDashboard(false);
-      reload({ polling });
+        }
+      }
     });
+    const stateLenMap = dataSource.reduce(
+      (
+        prev: {
+          maxState: string;
+          maxRelease: string;
+          maxBuild: string;
+        },
+        cur: any,
+      ) => {
+        const { state, optionState, release, buildStatus } = cur;
+        // state title len
+        if (optionState === OptionStateEnum.NONE) {
+          const stateStr = stateMap[state]?.title;
+          if (stateStr && stateStr.length > prev.maxState.length) {
+            prev.maxState = stateStr;
+          }
+        } else {
+          const stateStr = optionStateMap[optionState]?.title;
+          if (stateStr && stateStr.length > prev.maxState.length) {
+            prev.maxState = stateStr;
+          }
+        }
+
+        //release title len
+        const releaseStr = releaseStateMap[release]?.title;
+        if (releaseStr && releaseStr.length > prev.maxRelease.length) {
+          prev.maxRelease = releaseStr;
+        }
+
+        //build title len
+        const buildStr = buildStatusMap[buildStatus]?.title;
+        if (buildStr && buildStr.length > prev.maxBuild.length) {
+          prev.maxBuild = buildStr;
+        }
+        return prev;
+      },
+      {
+        maxState: '',
+        maxRelease: '',
+        maxBuild: '',
+      },
+    );
+    Object.assign(titleLenRef.value, stateLenMap);
+
+    return dataSource;
+  },
+  fetchSetting: { listField: 'records' },
+  immediate: true,
+  canResize: false,
+  showIndexColumn: false,
+  showTableSetting: true,
+  useSearchForm: true,
+  tableSetting: { fullScreen: true, redo: false },
+  actionColumn: {
+    dataIndex: 'operation',
+    title: t('component.table.operation'),
+    width: 180,
+  },
+});
+
+const { getTableActions, formConfig } = useAppTableAction(
+  openStartModal,
+  openStopModal,
+  openSavepoint,
+  openLogModal,
+  openBuildDrawer,
+  handlePageDataReload,
+  optionApps,
+);
+
+/* view */
+async function handleJobView(app: AppListRecord) {
+  // Task is running, restarting, in savePoint
+  if (
+    [AppStateEnum.RESTARTING, AppStateEnum.RUNNING].includes(app.state) ||
+    app['optionState'] === OptionStateEnum.SAVEPOINTING
+  ) {
+    // yarn-per-job|yarn-session|yarn-application
+    await handleView(app, unref(yarn));
   }
-  const { start, stop } = useTimeoutFn(() => {
-    if (!getLoading()) {
-      handlePageDataReload(true);
-    }
-    start();
-  }, 2000);
+}
 
-  onMounted(() => {
-    // If there is a page, jump to the page number of the record
-    const currentPage = sessionStorage.getItem('appPageNo');
-    if (currentPage) {
-      setPagination({
-        current: Number(currentPage) || 1,
+/* Update options data */
+function handleOptionApp(data: {
+  type: 'starting' | 'stopping' | 'release' | 'savepointing';
+  key: any;
+  value: any;
+}) {
+  optionApps[data.type].set(data.key, data.value);
+}
+
+function handlePageDataReload(polling = false) {
+  nextTick(() => {
+    appDashboardRef.value?.handleDashboard(false);
+    reload({ polling });
+  });
+}
+const { start, stop } = useTimeoutFn(() => {
+  if (!getLoading()) {
+    handlePageDataReload(true);
+  }
+  start();
+}, 2000);
+
+onMounted(() => {
+  // If there is a page, jump to the page number of the record
+  const currentPage = sessionStorage.getItem('appPageNo');
+  if (currentPage) {
+    setPagination({
+      current: Number(currentPage) || 1,
+    });
+    sessionStorage.removeItem('appPageNo');
+  }
+});
+
+onUnmounted(() => {
+  stop();
+});
+
+async function startSelectedApps() {
+  console.log(getSelectRowKeys());
+  try {
+    const savePointed = false;
+    const savePointPath = null;
+    for (let item of getSelectRowKeys().values()) {
+      const {data} = await fetchStart({
+        id: item,
+        savePointed,
+        savePoint: savePointPath,
+        allowNonRestored: false,
       });
-      sessionStorage.removeItem('appPageNo');
+      console.log("start result:", data)
     }
-  });
+  } catch (error) {
+    console.error(error);
+  }
+}
 
-  onUnmounted(() => {
-    stop();
-  });
+async function stopSelectedApps() {
+  console.log(getSelectRowKeys());
+  const savePointed = false;
+  const savePointPath = null;
+  const drain = false;
+  for (let item of getSelectRowKeys().values()) {
+    const stopReq = {
+      id: item,
+      savePointed: stopSavePointed,
+      savePoint: customSavepoint,
+      drain: drain,
+    };
+    await fetchCancel(stopReq);
+  }
+}
 </script>
 <template>
   <PageWrapper contentFullHeight>
     <AppDashboard ref="appDashboardRef" />
+    <div class="container">
+      <div><a-button class="ant-btn mr-2 ant-btn-primary" color="primary" preicon="ant-design:plus-outlined" iconsize="14" @click="startSelectedApps">启动</a-button></div>
+      <div><a-button class="ant-btn mr-2 ant-btn-primary" color="primary" preicon="ant-design:plus-outlined" iconsize="14" @click="stopSelectedApps">停止</a-button></div>
+    </div>
     <BasicTable
       @register="registerTable"
       :columns="getAppColumns"
       @resize-column="onTableColumnResize"
       class="app_list !px-0 pt-20px"
       :formConfig="formConfig"
+      :customRow="onClickRow"
+      :click-to-row-select=true
+      :row-selection="{selectedRowKeys:selectedRowKeys, onChange:onselectionchange}"
     >
-      <template #bodyCell="{ column, record }">
+      <template #bodyCell="{ column, record }" #action="{ record }">
         <template v-if="column.dataIndex === 'jobName'">
           <span class="app_type app_jar" v-if="record['jobType'] == JobTypeEnum.JAR"> JAR </span>
           <span class="app_type app_sql" v-if="record['jobType'] == JobTypeEnum.SQL"> SQL </span>
@@ -351,5 +406,10 @@
   </PageWrapper>
 </template>
 <style lang="less">
-  @import url('./styles/View.less');
+@import url('./styles/View.less');
+.container {
+  display: flex; /* 使用 Flexbox 布局 */
+  align-items: center; /* 垂直居中 */
+  margin-top: 20px;
+}
 </style>
